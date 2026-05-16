@@ -7,16 +7,19 @@ import yaml
 from skyfield.api import load, Topos
 
 TARGETS = {
-    1: ("Mercury",          "mercury"),
-    2: ("Venus",            "venus"),
-    3: ("Mars",             "mars"),
-    4: ("Jupiter",          "jupiter barycenter"),
-    5: ("Saturn",           "saturn barycenter"),
-    6: ("Uranus",           "uranus barycenter"),
-    7: ("Neptune",          "neptune barycenter"),
-    8: ("Moon",             "moon"),
-    9: ("Sun",              "sun"),
+    1: ("Mercury",  "mercury"),
+    2: ("Venus",    "venus"),
+    3: ("Mars",     "mars"),
+    4: ("Jupiter",  "jupiter barycenter"),
+    5: ("Saturn",   "saturn barycenter"),
+    6: ("Uranus",   "uranus barycenter"),
+    7: ("Neptune",  "neptune barycenter"),
+    8: ("Moon",     "moon"),
+    9: ("Sun",      "sun"),
 }
+
+ARDUINO_READY_TIMEOUT_S = 10
+FIRMWARE_WATCHDOG_S = 10  # must match COMMAND_TIMEOUT_MS in tracker.ino
 
 
 def load_config(path="config.yaml"):
@@ -59,8 +62,23 @@ def compute_position(observer, target, ts):
     return az.degrees, alt.degrees
 
 
+def wait_for_ready(ser):
+    """Wait for Arduino to send READY after reset."""
+    deadline = time.time() + ARDUINO_READY_TIMEOUT_S
+    while time.time() < deadline:
+        if ser.in_waiting:
+            line = ser.readline().decode("utf-8", errors="ignore").strip()
+            if line == "READY":
+                logging.info("Arduino ready")
+                return True
+    logging.warning("Timed out waiting for Arduino READY — proceeding anyway")
+    return False
+
+
 def run_tracker(cfg, ser, observer, target_body, ts):
     interval = cfg["tracker"]["update_interval_s"]
+    above_horizon = None  # track state to send STOP only on transition
+
     while True:
         try:
             az, alt = compute_position(observer, target_body, ts)
@@ -76,12 +94,17 @@ def run_tracker(cfg, ser, observer, target_body, ts):
                 ser.write(cmd.encode("utf-8"))
             except Exception as e:
                 logging.error(f"Serial write error: {e}")
+            above_horizon = True
         else:
-            logging.info(f"Below horizon (ALT:{alt:.2f}) — not sending")
-            try:
-                ser.write(b"CMD:STOP\n")
-            except Exception as e:
-                logging.error(f"Serial write error: {e}")
+            if above_horizon is not False:  # retry until write succeeds
+                logging.info(f"Target below horizon (ALT:{alt:.2f}) — sending STOP")
+                try:
+                    ser.write(b"CMD:STOP\n")
+                    above_horizon = False  # only mark sent after confirmed write
+                except Exception as e:
+                    logging.error(f"Serial write error: {e}")
+                    # above_horizon stays non-False; STOP will be retried next loop
+            # else: already confirmed stopped, nothing to send
 
         try:
             line = ""
@@ -98,6 +121,14 @@ def run_tracker(cfg, ser, observer, target_body, ts):
 def main():
     cfg = load_config()
     setup_logging(cfg)
+
+    interval = cfg["tracker"]["update_interval_s"]
+    if interval >= FIRMWARE_WATCHDOG_S / 2:
+        logging.warning(
+            f"update_interval_s ({interval}s) is more than half the firmware watchdog "
+            f"({FIRMWARE_WATCHDOG_S}s) — Arduino may stop between updates. "
+            f"Keep update_interval_s below {FIRMWARE_WATCHDOG_S / 2}s."
+        )
 
     if "--check-config" in sys.argv:
         obs = cfg["observer"]
@@ -130,7 +161,6 @@ def main():
             logging.error(f"Could not load target '{target_key}': {e}")
             continue
 
-        # Show initial position before opening serial
         try:
             az, alt = compute_position(observer, target_body, ts)
             print(f"\n{target_label}: AZ={az:.2f}°  ALT={alt:.2f}°")
@@ -142,7 +172,7 @@ def main():
         print("Connecting to Arduino... (Ctrl+C to re-select target)\n")
         try:
             with serial.Serial(ser_cfg["port"], ser_cfg["baud"], timeout=1) as ser:
-                time.sleep(2)  # allow Arduino to reset after serial open
+                wait_for_ready(ser)
                 run_tracker(cfg, ser, observer, target_body, ts)
         except KeyboardInterrupt:
             print("\nReturning to target menu...")

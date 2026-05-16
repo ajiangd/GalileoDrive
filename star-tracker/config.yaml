@@ -8,7 +8,7 @@ serial:
   baud: 115200
 
 tracker:
-  update_interval_s: 1.0
+  update_interval_s: 1.0  # must be < COMMAND_TIMEOUT_MS/2000 in tracker.ino (default: keep below 5s)
   ephemeris: de421.bsp
 
 pid:
