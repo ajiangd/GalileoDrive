@@ -1,0 +1,26 @@
+observer:
+  latitude: 39.9
+  longitude: 116.4
+  elevation_m: 50
+
+serial:
+  port: /dev/ttyACM0
+  baud: 115200
+
+tracker:
+  update_interval_s: 1.0
+  ephemeris: de421.bsp
+
+pid:
+  azimuth:  { kp: 2.0, ki: 0.05, kd: 0.5 }
+  altitude: { kp: 2.0, ki: 0.05, kd: 0.5 }
+
+motor:
+  steps_per_rev: 200   # NEMA 17 standard
+  microstep: 16        # set via driver DIP switches
+  gear_ratio_az: 1.0   # adjust for any reduction gearing
+  gear_ratio_alt: 1.0
+
+logging:
+  file: logs/tracker.log
+  level: INFO
